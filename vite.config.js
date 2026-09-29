@@ -31,4 +31,10 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  // The demo application. The library (what is published) builds into dist/
+  // with vite.lib.config.js; keeping them apart means neither overwrites the
+  // other.
+  build: {
+    outDir: 'dist-demo',
+  },
 })

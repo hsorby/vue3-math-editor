@@ -4,9 +4,9 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    "declarationDir": "dist/types",
+    "outDir": "dist/types",
     "rootDir": "src"
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],
-  "exclude": ["src/main.ts", "src/App.vue", "src/demo/**"]
+  "exclude": ["node_modules", "dist", "src/main.ts", "src/App.vue", "src/demo"]
 }

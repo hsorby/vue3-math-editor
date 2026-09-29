@@ -3,13 +3,10 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// The library build (`yarn build`): what is published to npm. The demo
-// application is built with vite.config.js (`yarn build:demo`).
-//
-// Vue, PrimeVue and KaTeX are peer dependencies: left as imports for the
-// host's bundler to resolve, so the host has one copy of each.
-const external = /^(vue|primevue|@primeuix|katex)(\/|$)/
-
+// The library build (yarn build:lib): src/index.ts as an ES module in dist/,
+// with the components' styles in dist/style.css. Vue, PrimeVue and KaTeX are
+// peer dependencies, left for the host to provide. The demo builds with
+// vite.config.js instead, into dist-demo/.
 export default defineConfig({
   plugins: [
     vue({
@@ -25,12 +22,11 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
-  // public/ holds the demo's favicon, which isn't part of the library.
+  // public/ (the demo's favicon) isn't part of the library.
   publicDir: false,
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    sourcemap: true,
     lib: {
       entry: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
       formats: ['es'],
@@ -38,7 +34,7 @@ export default defineConfig({
       cssFileName: 'style',
     },
     rolldownOptions: {
-      external: (id) => external.test(id),
+      external: ['vue', 'katex', /^primevue(\/|$)/],
     },
   },
 })

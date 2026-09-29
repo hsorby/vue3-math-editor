@@ -3674,10 +3674,10 @@ __metadata:
     vue-tsc: "npm:^3.1.1"
     vue3-libcellml.js: "npm:^0.7.1"
   peerDependencies:
-    katex: ^0.17.0
+    katex: ^0.16.0 || ^0.17.0
     primeicons: ^7.0.0
     primevue: ^4.5.5
-    vue: ^3.5.38
+    vue: ^3.5.0
   languageName: unknown
   linkType: soft
 

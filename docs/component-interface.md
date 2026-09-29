@@ -25,6 +25,8 @@ Nothing here needs libCellML.
 | `issues` | `UnitsIssue[]` | `[]` | Units problems to show. Each is underlined in amber on its line and listed under the equations when that line is active; the message shows on hover. |
 | `variableUnits` | `Record<string, string>` | none | Each variable's units by name, shown on hover ("Vm: millivolt"). When given, numbers without units also show theirs on hover ("2: dimensionless"); numbers with units always do ("0.25: mV"). |
 | `greekNames` | `boolean` | `true` | Names that are Greek letters' names (`alpha`, `tau_m`) are drawn as the letters (α, τ_m), however they were typed; off, every Greek letter is spelled out (`\alpha` included). The names, and so the MathML, are the same either way. |
+| `outputs` | `boolean` | `true` | The output panels (Content MathML, MathJSON, LaTeX, AST) and the "Copy as" menu. Off, only the equation lines (and the `side` slot) show: for an application embedding the editor. |
+| `history` | `boolean` | `true` | The workbench's own undo and redo. Off, nothing is recorded, the Undo and Redo buttons are hidden, and Ctrl/Cmd+Z and Ctrl/Cmd+Y are left for the host (see [Embedding](#embedding-in-an-application)). |
 
 ### Slot
 
@@ -35,10 +37,47 @@ it, they go beside it. On a narrow screen everything stacks: editor, side, outpu
 typed in the side content are left alone by the workbench, so `\` and Ctrl+Z work there
 as in any input.
 
+### Methods
+
+Through a template ref:
+
+```vue
+<script setup lang="ts">
+import { useTemplateRef } from 'vue'
+import { EquationWorkbench } from 'vue3-math-editor'
+
+const workbench = useTemplateRef('workbench')
+
+function open(mathml: string) {
+  const { problems } = workbench.value!.setMathML(mathml)
+  if (problems.length) console.warn(problems)
+}
+</script>
+
+<template>
+  <EquationWorkbench ref="workbench" cellml />
+</template>
+```
+
+| Method | Meaning |
+|---|---|
+| `setMathML(xml: string): MathMLImport` | Replace every line with the equations in `xml`: Content MathML with one or more `<math>` elements, or bare `<apply>`s, one line each. An empty string leaves one empty line. It is a new document: the undo history starts again, so the user can't undo back to what was there. Returns `{ equations, problems }`, where `problems` lists what couldn't be read (each was left as an empty slot). If `xml` isn't well-formed, the lines are left as they were and `problems` says so. |
+| `focus(): void` | Focus the active line. |
+
 ### Event
 
 `equations-change` is emitted with every line whenever the content of any line changes
-(not when only the cursor moves), and once when the workbench is created.
+(not when only the cursor moves), and once when the workbench is created. Its second
+argument says what changed the lines:
+
+```ts
+interface EquationsChangeInfo {
+  source: 'load' | 'edit' // 'load': the workbench started, or setMathML; 'edit': the user
+}
+```
+
+A host keeping its own copy of the model can use it to tell a load from an edit, so as
+not to mark the model changed just because it was opened in the editor.
 
 ```ts
 interface EquationLine {
@@ -71,7 +110,8 @@ Issues are matched to lines by id, so they stay on the right line when lines are
 removed above them. An issue naming nothing that appears in the line is listed but not
 underlined.
 
-The types are exported from `src/editor/units.ts`.
+The types are exported from the package: `import type { EquationLine, UnitsIssue } from
+'vue3-math-editor'`.
 
 ## Importing Content MathML
 
@@ -79,10 +119,28 @@ Pasting Content MathML into an equation imports it (see [Writing
 equations](writing-equations.md)): one equation at the caret, or several replacing every
 line, with numbers' `cellml:units` kept. Each imported line is reported through
 `equations-change` like any other, so a units checker sees it straight away; variables'
-units aren't part of the maths and are given as usual. The reader is
-`importContentMathML(text)` in `src/editor/mathmlImport.ts`, returning `{ equations,
-problems }` (rows ready for the editor), for a host that wants to import without the
-clipboard.
+units aren't part of the maths and are given as usual. To set the lines from the host,
+use `setMathML` (above). The reader itself is exported as `importContentMathML(text)`,
+returning `{ equations, problems }` (rows ready for the editor), or `null` if the text
+isn't well-formed XML.
+
+What it reads:
+
+| | Elements |
+|---|---|
+| Tokens | `ci`, `cn` (with `cellml:units`, and `type="e-notation"` with `<sep/>`) |
+| Constants | `pi`, `exponentiale`, `infinity`, `notanumber`, `true`, `false` |
+| Arithmetic | `plus`, `minus` (one or two operands), `times`, `divide`, `power`, `root` (with `degree`), `abs` |
+| Relations and logic | `eq`, `neq`, `lt`, `gt`, `leq`, `geq`, `and`, `or`, `xor`, `not` |
+| Calculus | `diff` with a `bvar` (first order only) |
+| Functions | `exp`, `ln`, `log` (with `logbase`), `floor`, `ceiling`, `min`, `max`, `rem` |
+| Trigonometric | `sin`, `cos`, `tan`, `sec`, `csc`, `cot`, and their `arc…` inverses |
+| Hyperbolic | `sinh`, `cosh`, `tanh`, `sech`, `csch`, `coth`, and their `arc…` inverses |
+| Conditions | `piecewise` with `piece` and `otherwise` |
+
+Anything else (for example a higher-order derivative, `factorial`, or a `csymbol`) is
+listed in `problems` and left as an empty slot. A `ci` that isn't a CellML name, or is
+spelled like a function or a constant, is also reported.
 
 ## Number units
 
@@ -116,11 +174,14 @@ app.use(libcellmlPlugin)
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import EquationWorkbench from './components/EquationWorkbench.vue'
-import type { EquationLine, VariableUnits } from './editor/units'
-import type { UnitsDefinition } from './units/definitions'
-import type { UnitsSource } from './units/library'
-import { useUnitsChecker } from './units/useUnitsChecker'
+import {
+  EquationWorkbench,
+  type EquationLine,
+  type UnitsDefinition,
+  type UnitsSource,
+  type VariableUnits,
+  useUnitsChecker,
+} from 'vue3-math-editor'
 
 const lines = ref<EquationLine[]>([])
 const sources = ref<UnitsSource[]>([]) // { name, text } of each CellML units file
@@ -180,7 +241,7 @@ none; the demo checks once a units file is loaded or any variable has units.
 
 ### The units panel
 
-`UnitsPanel` (`src/units/UnitsPanel.vue`) is a ready-made panel for all this, meant for
+`UnitsPanel` (exported; `src/units/UnitsPanel.vue`) is a ready-made panel for all this, meant for
 the workbench's `side` slot. It shows the checker's status, loads units files
 (any CellML file; only its units are kept), lists each file's units and problems, and
 lets the user define new units, and lists the variables the equations use, with an
@@ -253,6 +314,8 @@ definitions doesn't need libCellML; without it, only the names used can't be che
 
 ### Without Vue
 
+Within this repository (these classes aren't exported from the package):
+
 ```ts
 import { UnitsLibrary } from './units/library'
 import { UnitsChecker } from './units/check'
@@ -277,3 +340,53 @@ either isn't analysed further. Units that differ only in scale (`mV` and `volt`)
 match. Lines that aren't
 `complete` aren't checked. See *Units checking* in [the design](design.md) for how it
 works.
+
+## Embedding in an application
+
+```sh
+yarn add vue3-math-editor vue primevue katex primeicons
+```
+
+The host installs PrimeVue with a theme and imports the styles: the editor's own, and
+KaTeX's and PrimeIcons', which it doesn't bundle.
+
+```ts
+import 'katex/dist/katex.min.css'
+import 'primeicons/primeicons.css'
+import 'vue3-math-editor/style.css'
+```
+
+An editor inside another application usually wants `:outputs="false"`, and the lines
+loaded with `setMathML` rather than pasted.
+
+### Undo and redo
+
+The workbench handles Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y itself, in a keydown
+listener in the capture phase on its root element. A host with one undo history across
+several editors can either:
+
+- set `:history="false"`: the workbench records nothing, hides its Undo and Redo buttons
+  and leaves those keys alone, so they reach the host's own listeners; or
+- keep it on and catch the keys first, with a capture-phase listener on an element around
+  the workbench (it runs before the workbench's), calling `preventDefault()` and
+  `stopPropagation()`.
+
+Either way, the host restores a state by calling `setMathML` with its saved MathML.
+
+### Theming
+
+Colours come from the PrimeVue theme's design tokens (`--p-content-background`,
+`--p-text-color`, `--p-content-border-color`, `--p-text-muted-color`, …), so the
+workbench follows the host's light or dark mode. Without PrimeVue's tokens it falls back
+to a light theme. The accent (the active line's border, the toolbar buttons' hover) is
+the editor's own blue; set `--math-editor-accent` on an element around it to change it. The output
+panels are dark in both modes.
+
+### MathML text
+
+An `EquationLine`'s `mathml` is written the same way every time for the same equation:
+the same indentation, attribute order and `<sep/>` handling. So reading lines, loading
+them with `setMathML` and reading them again gives the same text. MathML written by
+something else (libCellML, another editor) is generally formatted differently, even for
+the same equations. Compare after normalising, or expect the first load of such MathML
+to read back as different text.
