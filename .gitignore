@@ -46,3 +46,5 @@ __screenshots__/
 
 # AI
 Claude outputs/
+
+.yarn/install-state.gz
