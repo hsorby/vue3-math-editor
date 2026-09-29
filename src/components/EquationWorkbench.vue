@@ -16,10 +16,16 @@
 //   consumers get plain Content MathML.
 // - `equations-change` event: every line (a stable id, its CellML-mode
 //   Content MathML, the variables it uses, whether it's complete), whenever
-//   any line's content changes. For a units checker outside the editor.
+//   any line's content changes, and whether the user or the host changed
+//   them. For a units checker outside the editor.
 // - `issues` prop: units issues to underline, by line id and variable names.
 // - `variableUnits` prop: each variable's units, shown on hover; with it,
 //   numbers show their units on hover too.
+// - `outputs` prop: the output panels and "Copy as" (on by default).
+// - `history` prop: the workbench's own undo/redo (on by default); off, a host
+//   with its own undo history gets Ctrl/Cmd+Z and Y.
+// - `setMathML(xml)` and `focus()`, exposed: set every line from Content
+//   MathML (a new document: no undo back past it), and focus the editor.
 import { computed, nextTick, ref, toRaw, watch } from 'vue'
 import katex from 'katex'
 import Button from 'primevue/button'
@@ -57,6 +63,7 @@ import { EXPORT_FORMATS, type ExportFormat, contentMathML, exportRow } from '../
 import { type EditInfo, History, OTHER_EDIT, undoGroup } from '../editor/history'
 import {
   type EquationLine,
+  type EquationsChangeInfo,
   type UnitsIssue,
   type VariableUnits,
   equationLine,
@@ -64,7 +71,7 @@ import {
   unitsIssueMarks,
 } from '../editor/units'
 import type { Row } from '../editor/layout'
-import type { MathMLImport } from '../editor/mathmlImport'
+import { type MathMLImport, importContentMathML } from '../editor/mathmlImport'
 import { settleNames } from '../editor/names'
 import { settleState } from '../editor/numberUnits'
 import { parseRow } from '../editor/parse'
@@ -80,12 +87,24 @@ const props = withDefaults(
     // (α, τ_m), however they were typed; off, Greek letters are spelled out.
     // Either way the names are the same (editor/names.ts).
     greekNames?: boolean
+    // The Content MathML, MathJSON, LaTeX and AST panels, and "Copy as".
+    outputs?: boolean
+    // The workbench's own undo/redo: off, nothing is recorded, the buttons are
+    // hidden and Ctrl/Cmd+Z and Y are left to the host.
+    history?: boolean
   }>(),
-  { cellml: false, issues: () => [], variableUnits: undefined, greekNames: true },
+  {
+    cellml: false,
+    issues: () => [],
+    variableUnits: undefined,
+    greekNames: true,
+    outputs: true,
+    history: true,
+  },
 )
 
 const emit = defineEmits<{
-  'equations-change': [lines: EquationLine[]]
+  'equations-change': [lines: EquationLine[], info: EquationsChangeInfo]
 }>()
 
 const exportOptions = computed(() => ({ cellml: props.cellml, greekNames: props.greekNames }))
@@ -145,7 +164,7 @@ interface Snapshot {
   active: number
 }
 
-const history = new History<Snapshot>()
+const undoHistory = new History<Snapshot>()
 // History isn't reactive; bumped whenever it changes, for canUndo/canRedo.
 const historyVersion = ref(0)
 
@@ -161,7 +180,8 @@ function takeSnapshot(): Snapshot {
 
 // Record the state before an edit to line `line` (default: a step of its own).
 function pushHistory(line = activeIndex.value, info: EditInfo = OTHER_EDIT) {
-  history.checkpoint(takeSnapshot, undoGroup(line, info))
+  if (!props.history) return
+  undoHistory.checkpoint(takeSnapshot, undoGroup(line, info))
   historyVersion.value++
 }
 
@@ -174,11 +194,11 @@ function restore(snapshot: Snapshot | null) {
   focusActive()
 }
 
-const undo = () => restore(history.undo(takeSnapshot()))
-const redo = () => restore(history.redo(takeSnapshot()))
+const undo = () => restore(undoHistory.undo(takeSnapshot()))
+const redo = () => restore(undoHistory.redo(takeSnapshot()))
 
-const canUndo = computed(() => historyVersion.value >= 0 && history.canUndo)
-const canRedo = computed(() => historyVersion.value >= 0 && history.canRedo)
+const canUndo = computed(() => historyVersion.value >= 0 && undoHistory.canUndo)
+const canRedo = computed(() => historyVersion.value >= 0 && undoHistory.canRedo)
 
 // ---------------------------------------------------------------------------
 // Editing
@@ -199,8 +219,18 @@ function handleEdit(index: number, next: EditorState, info: EditInfo) {
 // Cursor moves and selection changes: not recorded in undo history, but the
 // next edit starts a new undo step.
 function handleNavigate(index: number, { cursor, anchor }: NavigationState) {
-  history.breakGroup()
+  undoHistory.breakGroup()
   setEquation(index, { ...equations.value[index], cursor, anchor })
+}
+
+// Every line replaced, one per row (none: one empty line), each with a new id.
+function replaceLines(roots: readonly Row[]) {
+  const states = roots.map((root) =>
+    settle({ root, cursor: cursorAtEnd(root), anchor: null }, true),
+  )
+  equations.value = states.length ? states : [emptyState()]
+  lineIds.value = equations.value.map(() => newLineId())
+  activeIndex.value = 0
 }
 
 // Pasted Content MathML: one equation (or expression) goes in at the caret,
@@ -215,11 +245,7 @@ function handleImport(index: number, result: MathMLImport) {
     handleEdit(index, insertAtoms(result.equations[0])(equations.value[index]), OTHER_EDIT)
   } else if (count > 1) {
     pushHistory(index)
-    equations.value = result.equations.map((root) =>
-      settle({ root, cursor: cursorAtEnd(root), anchor: null }, true),
-    )
-    lineIds.value = result.equations.map(() => newLineId())
-    activeIndex.value = 0
+    replaceLines(result.equations)
     focusActive()
   }
 
@@ -236,6 +262,27 @@ function handleImport(index: number, result: MathMLImport) {
         }
       : null
 }
+
+// The host sets the lines (exposed): Content MathML with one or more <math>,
+// or bare <apply>s, one line each. A new document: the undo history starts
+// again, and the equations-change event says 'load'. Malformed XML leaves the
+// lines as they were.
+function setMathML(xml: string): MathMLImport {
+  const result = importContentMathML(xml)
+  if (!result) {
+    return { equations: [], problems: ["The MathML isn't well-formed XML, so nothing was loaded"] }
+  }
+
+  changeSource = 'load'
+  replaceLines(result.equations)
+  commandBuffer.value = null
+  importNotice.value = null
+  undoHistory.clear()
+  historyVersion.value++
+  return result
+}
+
+defineExpose({ setMathML, focus: focusActive })
 
 // Run a command on the active line (toolbar buttons, command mode).
 function run(command: Command) {
@@ -265,7 +312,7 @@ function addLineAfterActive() {
 
 function moveToLine(index: number) {
   if (index < 0 || index >= equations.value.length) return
-  history.breakGroup()
+  undoHistory.breakGroup()
   activeIndex.value = index
   focusActive()
 }
@@ -322,7 +369,7 @@ function handleCaptureKeydown(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && !event.altKey) {
     const key = event.key.toLowerCase()
 
-    if (key === 'z' || key === 'y') {
+    if ((key === 'z' || key === 'y') && props.history) {
       event.preventDefault()
       event.stopPropagation()
       if (key === 'y' || event.shiftKey) redo()
@@ -509,13 +556,18 @@ const lines = computed(() =>
   }),
 )
 let lastEmitted = ''
+// What the next change is: the first (the lines the workbench starts with) is
+// a load, as is setMathML's.
+let changeSource: EquationsChangeInfo['source'] = 'load'
 watch(
   lines,
   (current) => {
+    const source = changeSource
+    changeSource = 'edit'
     const key = JSON.stringify(current)
     if (key === lastEmitted) return
     lastEmitted = key
-    emit('equations-change', current)
+    emit('equations-change', current, { source })
   },
   { immediate: true },
 )
@@ -630,7 +682,7 @@ function toggleCopyMenu(event: Event) {
 <template>
   <section
     class="editor-grid"
-    :class="{ 'has-side': !!$slots.side }"
+    :class="{ 'has-side': !!$slots.side, 'no-outputs': !outputs }"
     @keydown.capture="handleCaptureKeydown"
   >
     <Card class="editor-card">
@@ -705,6 +757,7 @@ function toggleCopyMenu(event: Event) {
 
           <div class="toolbar-group">
             <Button
+              v-if="props.history"
               icon="pi pi-undo"
               size="small"
               text
@@ -714,6 +767,7 @@ function toggleCopyMenu(event: Event) {
               @click="undo"
             />
             <Button
+              v-if="props.history"
               icon="pi pi-refresh"
               size="small"
               text
@@ -743,7 +797,7 @@ function toggleCopyMenu(event: Event) {
             />
           </div>
 
-          <div class="toolbar-group">
+          <div v-if="outputs" class="toolbar-group">
             <Button
               icon="pi pi-copy"
               :label="copyAsLabel"
@@ -856,7 +910,9 @@ function toggleCopyMenu(event: Event) {
             <code>cosh</code>, …) is that function · <code>\</code> commands (<code
               >\frac \sqrt \root \abs \dd \cases \sin \pi \e \inf \alpha</code
             >
-            …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo
+            …) · <kbd>Backspace</kbd>/<kbd>Delete</kbd> delete<template v-if="props.history">
+              · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</template
+            >
           </p>
         </details>
       </template>
@@ -868,7 +924,7 @@ function toggleCopyMenu(event: Event) {
       <slot name="side" />
     </aside>
 
-    <Card class="output-card" data-role="outputs">
+    <Card v-if="outputs" class="output-card" data-role="outputs">
       <template #content>
         <Tabs v-model:value="outputTab">
           <TabList>
@@ -917,7 +973,21 @@ function toggleCopyMenu(event: Event) {
 </template>
 
 <style scoped>
+/* Colours follow the host's PrimeVue theme (light or dark), with light
+   fallbacks. The accent is the editor's own blue unless the host sets
+   --math-editor-accent. */
 .editor-grid {
+  --me-accent: var(--math-editor-accent, #2563eb);
+  --me-surface: var(--p-content-background, #ffffff);
+  --me-subtle: var(--p-content-hover-background, #f1f5f9);
+  --me-border: var(--p-content-border-color, #e2e8f0);
+  --me-border-strong: var(--p-form-field-border-color, #cbd5e1);
+  --me-text: var(--p-text-color, #0f172a);
+  --me-muted: var(--p-text-muted-color, #64748b);
+  /* Notices: a tint of the colour behind, text part way to the theme's. */
+  --me-warn: #d97706;
+  --me-caution: #ea580c;
+
   max-width: 1240px;
   margin: 0 auto;
   display: grid;
@@ -934,6 +1004,18 @@ function toggleCopyMenu(event: Event) {
   grid-template-areas:
     'editor side'
     'outputs side';
+}
+
+/* Without outputs: the editor alone, or beside the side content. */
+.editor-grid.no-outputs {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: 'editor';
+}
+
+.editor-grid.no-outputs.has-side {
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-rows: auto;
+  grid-template-areas: 'editor side';
 }
 
 .editor-card {
@@ -989,10 +1071,10 @@ function toggleCopyMenu(event: Event) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #d7dde6;
+  border: 1px solid var(--me-border-strong);
   border-radius: 0.5rem;
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--me-surface);
+  color: var(--me-text);
   font-size: 0.82rem;
   cursor: pointer;
   transition:
@@ -1002,8 +1084,8 @@ function toggleCopyMenu(event: Event) {
 }
 
 .tool-button:hover {
-  border-color: #2563eb;
-  background: #eff6ff;
+  border-color: var(--me-accent);
+  background: color-mix(in srgb, var(--me-accent) 8%, var(--me-surface));
 }
 
 .tool-button:active {
@@ -1026,27 +1108,28 @@ function toggleCopyMenu(event: Event) {
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--me-border);
   border-radius: 0.65rem;
-  background: #ffffff;
+  background: var(--me-surface);
+  color: var(--me-text);
   transition:
     border-color 0.12s ease,
     box-shadow 0.12s ease;
 }
 
 .equation-row.active {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--me-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--me-accent) 12%, transparent);
 }
 
 .equation-label {
   display: flex;
   align-items: center;
   padding: 0 0.4rem 0 0.65rem;
-  color: #94a3b8;
+  color: var(--me-muted);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
-  border-right: 1px solid #f1f5f9;
+  border-right: 1px solid var(--me-border);
 }
 
 .equation-field {
@@ -1091,7 +1174,7 @@ function toggleCopyMenu(event: Event) {
 
 .focus-meta {
   margin: 0.75rem 0 0;
-  color: #64748b;
+  color: var(--me-muted);
   font-size: 0.8rem;
 }
 
@@ -1099,8 +1182,8 @@ function toggleCopyMenu(event: Event) {
   margin: 0.5rem 0 0;
   padding: 0.4rem 0.6rem 0.4rem 1.6rem;
   border-radius: 0.45rem;
-  background: #fef3c7;
-  color: #92400e;
+  background: color-mix(in srgb, var(--me-warn) 16%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-warn) 55%, var(--me-text));
   font-size: 0.8rem;
 }
 
@@ -1108,8 +1191,8 @@ function toggleCopyMenu(event: Event) {
   margin: 0.5rem 0 0;
   padding: 0.35rem 0.6rem;
   border-radius: 0.5rem;
-  background: #eff6ff;
-  color: #1e3a8a;
+  background: color-mix(in srgb, var(--me-accent) 8%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-accent) 45%, var(--me-text));
   font-size: 0.8rem;
 }
 
@@ -1123,12 +1206,12 @@ function toggleCopyMenu(event: Event) {
 .import-notice ul {
   margin: 0.2rem 0 0.1rem;
   padding-left: 1.1rem;
-  color: #9a3412;
+  color: color-mix(in srgb, var(--me-caution) 55%, var(--me-text));
 }
 
 .units-issues {
-  background: #ffedd5;
-  color: #9a3412;
+  background: color-mix(in srgb, var(--me-caution) 14%, var(--me-surface));
+  color: color-mix(in srgb, var(--me-caution) 55%, var(--me-text));
 }
 
 .output-actions {
@@ -1150,13 +1233,13 @@ function toggleCopyMenu(event: Event) {
 .key-help summary {
   cursor: pointer;
   width: fit-content;
-  color: #475569;
+  color: var(--me-muted);
   font-size: 0.85rem;
 }
 
 .key-hint {
   margin: 0.5rem 0 0;
-  color: #64748b;
+  color: var(--me-muted);
   font-size: 0.8rem;
   line-height: 1.5;
 }
@@ -1165,16 +1248,16 @@ function toggleCopyMenu(event: Event) {
   display: inline-block;
   padding: 0 0.3rem;
   margin: 0 0.08rem;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--me-border-strong);
   border-bottom-width: 2px;
   border-radius: 0.3rem;
-  background: #f8fafc;
+  background: var(--me-subtle);
   font-size: 0.72rem;
   font-family: inherit;
 }
 
 .key-hint code {
-  background: #f1f5f9;
+  background: var(--me-subtle);
   border-radius: 0.25rem;
   padding: 0.05rem 0.3rem;
 }
@@ -1193,7 +1276,8 @@ function toggleCopyMenu(event: Event) {
 
 @media (max-width: 900px) {
   .editor-grid,
-  .editor-grid.has-side {
+  .editor-grid.has-side,
+  .editor-grid.no-outputs.has-side {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: none;
     grid-template-areas: 'editor' 'side' 'outputs';

@@ -155,3 +155,24 @@ describe('History', () => {
     expect(history.undo(2)).toBeNull()
   })
 })
+
+describe('History.clear', () => {
+  it('forgets every undo and redo step, and starts a new step next', () => {
+    const h = setup()
+    h.typeChars('ab')
+    h.edit('ab+', { kind: 'type', text: '+' })
+    h.undo()
+    expect(h.history.canUndo).toBe(true)
+    expect(h.history.canRedo).toBe(true)
+
+    h.history.clear()
+    expect(h.history.canUndo).toBe(false)
+    expect(h.history.canRedo).toBe(false)
+
+    // Typing on joins no group from before.
+    h.typeChars('c')
+    h.undo()
+    expect(h.text).toBe('ab')
+    expect(h.history.canUndo).toBe(false)
+  })
+})

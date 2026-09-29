@@ -14,12 +14,22 @@ export default defineConfig([
     files: ['**/*.{vue,js,mjs,jsx,ts,tsx}'],
   },
 
-  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**']),
+  globalIgnores(['**/dist/**', '**/dist-demo/**', '**/dist-ssr/**', '**/coverage/**']),
 
   {
     languageOptions: {
       globals: {
         ...globals.browser,
+      },
+    },
+  },
+
+  // Config files run under Node.
+  {
+    files: ['*.config.{js,ts}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
       },
     },
   },

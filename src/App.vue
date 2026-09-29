@@ -3,7 +3,8 @@ import { computed, ref } from 'vue'
 import Button from 'primevue/button'
 
 import EquationWorkbench from './components/EquationWorkbench.vue'
-import type { EquationLine, UnitsIssue, VariableUnits } from './editor/units'
+import type { MathMLImport } from './editor/mathmlImport'
+import type { EquationLine, EquationsChangeInfo, UnitsIssue, VariableUnits } from './editor/units'
 import { type UnitsDefinition, newUnitsFile } from './units/definitions'
 import type { UnitsSource } from './units/library'
 import UnitsPanel from './units/UnitsPanel.vue'
@@ -11,12 +12,23 @@ import { useUnitsChecker } from './units/useUnitsChecker'
 import exampleUnits from './demo/example-units.cellml?raw'
 
 // Demo switches: ?cellml for CellML mode; ?nolibcellml to run without the
-// libCellML plugin (see main.ts), as an application without it would.
+// libCellML plugin (see main.ts), as an application without it would;
+// ?nooutputs and ?nohistory as an application embedding the editor might.
 const cellml = new URLSearchParams(window.location.search).has('cellml')
+const outputs = !new URLSearchParams(window.location.search).has('nooutputs')
+const history = !new URLSearchParams(window.location.search).has('nohistory')
 // Names that are Greek letters' names (alpha, tau_m) drawn as the letters.
 const greekNames = ref(!new URLSearchParams(window.location.search).has('nogreek'))
 
+const workbench = ref<InstanceType<typeof EquationWorkbench> | null>(null)
 const lines = ref<EquationLine[]>([])
+// Each equations-change event's source, in order (for the browser tests).
+const changeSources: EquationsChangeInfo['source'][] = []
+
+function handleEquationsChange(current: EquationLine[], info: EquationsChangeInfo) {
+  lines.value = current
+  changeSources.push(info.source)
+}
 const sources = ref<UnitsSource[]>([])
 const variableUnits = ref<VariableUnits>({})
 // Units the user defines, kept apart from the units files.
@@ -80,11 +92,18 @@ function loadExample() {
 }
 
 // For the browser tests: window.__workbench.lines is the latest
-// equations-change payload; setUnits({ issues, variableUnits }) sets them.
+// equations-change payload, and sources each event's source;
+// setUnits({ issues, variableUnits }) sets them; setMathML(xml) loads lines.
 Object.assign(window, {
   __workbench: {
     get lines() {
       return lines.value
+    },
+    get sources() {
+      return changeSources
+    },
+    setMathML(xml: string): MathMLImport | undefined {
+      return workbench.value?.setMathML(xml)
     },
     setUnits(units: { issues?: UnitsIssue[]; variableUnits?: VariableUnits }) {
       // From then on the test, not the checker, gives the issues.
@@ -107,11 +126,14 @@ Object.assign(window, {
     </section>
 
     <EquationWorkbench
+      ref="workbench"
       :cellml="cellml"
+      :outputs="outputs"
+      :history="history"
       :greek-names="greekNames"
       :issues="issues"
       :variable-units="hintUnits"
-      @equations-change="lines = $event"
+      @equations-change="handleEquationsChange"
     >
       <template #side>
         <UnitsPanel

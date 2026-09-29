@@ -13,7 +13,7 @@ See [docs/](docs/README.md):
 - [Component interface](docs/component-interface.md): using the editor in an application,
   and checking units with libCellML.
 
-The demo (`npm run dev`) checks units with libCellML through the
+The demo (`yarn dev`) checks units with libCellML through the
 [vue3-libcellml.js](https://github.com/hsorby/vue3-libcellml.js) plugin: load a CellML
 units file (or press Example), give the variables units, and problems are underlined as
 you type. Open it with `?nolibcellml` to run it without the plugin, and `?cellml` for
@@ -36,34 +36,58 @@ CellML-mode MathML.
 
 See [Vite Configuration Reference](https://vite.dev/config/).
 
+## Using it in an application
+
+```sh
+yarn add vue3-math-editor vue primevue katex primeicons
+```
+
+```ts
+// main.ts: install PrimeVue with a theme, and import the styles
+import 'katex/dist/katex.min.css'
+import 'primeicons/primeicons.css'
+import 'vue3-math-editor/style.css'
+```
+
+```vue
+<script setup lang="ts">
+import { EquationWorkbench, type EquationLine } from 'vue3-math-editor'
+</script>
+```
+
+See [Component interface](docs/component-interface.md) for the props, events and the
+units checker.
+
 ## Project Setup
 
 ```sh
-npm install
-npx playwright install chromium   # once, for the browser tests
+corepack enable                     # once: yarn comes from package.json's packageManager
+yarn install
+yarn playwright install chromium    # once, for the browser tests
 ```
 
 ### Compile and Hot-Reload for Development
 
 ```sh
-npm run dev
+yarn dev
 ```
 
-### Compile and Minify for Production
+### Build
 
 ```sh
-npm run build
+yarn build        # the library, into dist/ (what is published to npm)
+yarn build:demo   # the demo application, into dist-demo/
 ```
 
 ### Run the Tests
 
 ```sh
-npm test               # unit tests (Vitest)
-npm run test:e2e       # browser tests (Playwright)
+yarn test         # unit tests (Vitest)
+yarn test:e2e     # browser tests (Playwright)
 ```
 
 ### Lint with [ESLint](https://eslint.org/)
 
 ```sh
-npm run lint
+yarn lint
 ```
