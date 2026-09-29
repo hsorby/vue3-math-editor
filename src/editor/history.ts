@@ -111,6 +111,13 @@ export class History<S> {
     this.redoStack = []
   }
 
+  // Forget every step, as when a new document is opened.
+  clear(): void {
+    this.undoStack = []
+    this.redoStack = []
+    this.breakGroup()
+  }
+
   // The next edit starts a new undo step.
   breakGroup(): void {
     this.openGroup = null

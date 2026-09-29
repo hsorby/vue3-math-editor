@@ -30,6 +30,13 @@ export interface EquationLine {
   complete: boolean
 }
 
+// What changed the lines, given with each equations-change event: 'load' when
+// the workbench started or the host set the lines (setMathML), 'edit' when the
+// user changed them.
+export interface EquationsChangeInfo {
+  source: 'load' | 'edit'
+}
+
 // A units problem to show on a line.
 export interface UnitsIssue {
   lineId: string
